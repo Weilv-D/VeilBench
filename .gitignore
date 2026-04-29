@@ -1,6 +1,9 @@
 # 敏感配置
 .env
 
+# 评测题目（不应公开）
+prompts.py
+
 # Python
 .venv/
 __pycache__/
