@@ -9,6 +9,8 @@ VeilBench — Phase 2: 匿名评分
 import copy
 import json
 import os
+import shutil
+from datetime import datetime
 from config import MODELS, OBJECTIVE_WEIGHT, SUBJECTIVE_WEIGHT
 from prompts import ALL_TESTS
 from validators import run_objective_validation
@@ -29,6 +31,19 @@ def load_raw_results() -> dict:
             print(f"Warning: No results for {mk}")
             all_results[mk] = []
     return all_results
+
+
+def _save_checkpoint(evaluated: dict, step: int):
+    """增量保存评估结果到 results/evaluated_results.json，并保留历史备份。"""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    path = os.path.join(RESULTS_DIR, "evaluated_results.json")
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(evaluated, f, ensure_ascii=False, indent=2)
+    # 保留带时间戳的备份
+    ts = datetime.now().strftime("%m%d_%H%M%S")
+    backup = os.path.join(RESULTS_DIR, f"evaluated_results_T{step:02d}_{ts}.json")
+    shutil.copy2(path, backup)
+    print(f"  [CHECKPOINT] 已保存至 {path} (备份: {backup})", flush=True)
 
 
 def blend_scores(obj_score, subj_score) -> float:
@@ -154,6 +169,9 @@ def main():
                     "objective_validation": obj_val if obj_val else {"score": None, "detail": "未找到原始记录"},
                 })
 
+        # 每道题完成后增量保存
+        _save_checkpoint(evaluated, idx)
+
     z_scores = compute_z_scores(evaluated)
     if z_scores:
         print(f"\n[INFO] z-score 标准化完成", flush=True)
@@ -163,11 +181,9 @@ def main():
                 if mk in z_scores and tid in z_scores[mk]:
                     r.setdefault("evaluation", {})["z_score"] = round(z_scores[mk][tid], 2)
 
-    path = os.path.join(RESULTS_DIR, "evaluated_results.json")
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(evaluated, f, ensure_ascii=False, indent=2)
-    print(f"\n评分完成！结果保存至 {path}", flush=True)
-    print("运行 'python3 report.py' 生成报告。", flush=True)
+    # z-score 更新后的最终保存
+    _save_checkpoint(evaluated, len(ALL_TESTS))
+    print(f"\n评分完成！运行 'python3 report.py' 生成报告。", flush=True)
 
 
 if __name__ == "__main__":
