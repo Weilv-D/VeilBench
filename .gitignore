@@ -1,0 +1,18 @@
+# 敏感配置
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# IDE
+.claude/
+
+# 生成产物
+results/
+report.html
+quick_report.html
