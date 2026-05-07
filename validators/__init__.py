@@ -14,12 +14,12 @@ import math
 import tempfile
 import subprocess
 import os
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 
 
 # ==================== 数值智能提取 ====================
 
-def _parse_number(s: str) -> float:
+def _parse_number(s: str) -> Optional[float]:
     """解析数字字符串，支持分数"""
     s = s.strip()
     if '/' in s:

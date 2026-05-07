@@ -135,8 +135,6 @@ def main():
     else:
         evaluated = {mk: [] for mk in model_keys}
 
-    checkpoint_path = "evaluated_results.json"
-
     for idx, test_case in enumerate(tests_to_eval, 1):
         print(f"\n{'=' * 60}", flush=True)
         print(f"【题目 {idx}/{len(ALL_TESTS)}】{test_case.id} - {test_case.name}", flush=True)
@@ -238,7 +236,7 @@ def main():
                 })
 
         # 每道题完成后增量保存
-        _save_checkpoint(evaluated, idx, checkpoint_path)
+        _save_checkpoint(evaluated, idx, "evaluated_results.json")
 
     z_scores = compute_z_scores(evaluated)
     if z_scores:

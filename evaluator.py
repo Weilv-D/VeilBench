@@ -110,7 +110,7 @@ def parse_multi_judge_response(content: str) -> List[dict]:
     if json_match:
         json_str = json_match.group(1)
     else:
-        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        json_match = re.search(r'\[.*?\]', content, re.DOTALL)
         json_str = json_match.group(0) if json_match else content
 
     try:

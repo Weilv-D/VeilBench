@@ -20,7 +20,6 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from config import CHART_COLORS, CHART_FILLS, MODELS
@@ -46,8 +45,6 @@ CATEGORY_META = {
 
 CATEGORY_ORDER = sorted(CATEGORY_META.keys(), key=lambda c: CATEGORY_META[c]["order"])
 CATEGORY_NAMES = {c: CATEGORY_META[c]["name"] for c in CATEGORY_META}
-CATEGORY_ICONS = {c: CATEGORY_META[c]["icon"] for c in CATEGORY_META}
-
 # ==================== Utilities ====================
 
 def _avg(values: List[float]) -> float:
@@ -321,20 +318,53 @@ class ChartRenderer:
         step = 2 * math.pi / n
         start = -math.pi / 2
 
+        # Smart Dynamic Scaling (Fixed Max=10)
+        all_scores = [s for scores in data.values() for s in scores]
+        min_score = min(all_scores) if all_scores else 0
+        
+        axis_max = 10
+        proposed_min = max(0, math.floor(min_score) - 2)
+        val_range = axis_max - proposed_min
+
+        # Adjust to nice ranges for integer grid labels
+        if val_range < 4:
+            val_range = 4
+        elif val_range == 7:
+            val_range = 8
+        elif val_range == 9:
+            val_range = 10
+
+        axis_min = axis_max - val_range
+        
+        if val_range in (4, 5):
+            grid_steps = val_range
+        else: # 6, 8, 10
+            grid_steps = val_range // 2
+        
         grid, grid_labels = [], []
-        for lvl in [0.2, 0.4, 0.6, 0.8, 1.0]:
+        for step_i in range(1, grid_steps + 1):
+            lvl = step_i / grid_steps
+            val = axis_min + step_i * (val_range / grid_steps)
+            
             pts = " ".join(
                 f"{center + radius * lvl * math.cos(start + i * step):.1f},"
                 f"{center + radius * lvl * math.sin(start + i * step):.1f}"
                 for i in range(n)
             )
-            grid.append(f'<polygon points="{pts}" fill="none" stroke="var(--rule-light)" stroke-width="0.5"/>')
-            # Add numeric label at top axis for each level
+            grid.append(f'<polygon points="{pts}" fill="none" stroke="var(--ink)" stroke-width="0.5" stroke-dasharray="2,3"/>')
+            
             gy = center + radius * lvl * math.sin(start)
+            display_val = f"{val:.1f}" if val % 1 != 0 else f"{int(val)}"
             grid_labels.append(
                 f'<text x="{center + 4}" y="{gy:.1f}" font-size="9" fill="var(--muted)" '
-                f'font-family="Libre Baskerville, serif">{int(lvl * 10)}</text>'
+                f'font-family="Libre Baskerville, serif">{display_val}</text>'
             )
+            
+        # Draw center label
+        grid_labels.append(
+            f'<text x="{center + 4}" y="{center - 2}" font-size="9" fill="var(--muted)" '
+            f'font-family="Libre Baskerville, serif">{axis_min}</text>'
+        )
 
         axes = []
         for i in range(n):
@@ -342,7 +372,7 @@ class ChartRenderer:
             y = center + radius * math.sin(start + i * step)
             axes.append(
                 f'<line x1="{center}" y1="{center}" x2="{x:.1f}" y2="{y:.1f}" '
-                f'stroke="var(--rule-light)" stroke-width="0.5"/>'
+                f'stroke="var(--ink)" stroke-width="0.5" stroke-dasharray="2,3"/>'
             )
 
         labels = []
@@ -353,7 +383,7 @@ class ChartRenderer:
             anchor = "start" if math.cos(a) > 0.5 else ("end" if math.cos(a) < -0.5 else "middle")
             labels.append(
                 f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" font-size="11" '
-                f'fill="var(--muted)" font-family="EB Garamond, Georgia, serif">{cat}</text>'
+                f'fill="var(--muted)" font-family="Libre Baskerville, serif" font-weight="700">{cat}</text>'
             )
 
         polys, dots, legend = [], [], []
@@ -363,17 +393,21 @@ class ChartRenderer:
             pts = []
             for i, s in enumerate(scores):
                 a = start + i * step
-                r = (s / 10.0) * radius
+                # Clamp score strictly into [axis_min, axis_max] for drawing
+                clamped_s = max(axis_min, min(axis_max, s))
+                r = ((clamped_s - axis_min) / val_range) * radius
                 x = center + r * math.cos(a)
                 y = center + r * math.sin(a)
                 pts.append(f"{x:.1f},{y:.1f}")
                 dots.append(
-                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.5" fill="{color}" '
-                    f'stroke="white" stroke-width="0.5"/>'
+                    f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="{color}" '
+                    f'stroke="var(--paper)" stroke-width="1" class="radar-dot" data-model="{idx}">'
+                    f'<title>{_safe_name(mk)}: {s:.1f}</title></circle>'
                 )
             polys.append(
                 f'<polygon points="{" ".join(pts)}" fill="{fill_color}" stroke="{color}" '
-                f'stroke-width="1.5" stroke-linejoin="round" class="radar-poly" data-model="{idx}"/>'
+                f'stroke-width="2" stroke-linejoin="miter" class="radar-poly" data-model="{idx}">'
+                f'<title>{_safe_name(mk)}</title></polygon>'
             )
             name = _safe_name(mk)
             legend.append(
@@ -419,7 +453,7 @@ class ChartRenderer:
             yp = margin["top"] + ch - (yv / 10) * ch
             y_grid.append(
                 f'<line x1="{margin["left"]}" y1="{yp:.1f}" x2="{width - margin["right"]}" '
-                f'y2="{yp:.1f}" stroke="var(--rule-light)" stroke-width="0.5"/>'
+                f'y2="{yp:.1f}" stroke="var(--ink)" stroke-width="0.5" stroke-dasharray="2,3"/>'
             )
             y_grid.append(
                 f'<text x="{margin["left"] - 8}" y="{yp:.1f}" text-anchor="end" '
@@ -432,7 +466,7 @@ class ChartRenderer:
             rot = 'transform="rotate(-30,' + f'{gx},{height - margin["bottom"] + 18})"' if label_rotate else ""
             x_labels.append(
                 f'<text x="{gx}" y="{height - margin["bottom"] + 18}" text-anchor="{"end" if label_rotate else "middle"}" '
-                f'font-size="11" fill="var(--muted)" font-family="EB Garamond, serif" {rot}>{cat}</text>'
+                f'font-size="11" fill="var(--muted)" font-family="Libre Baskerville, serif" font-weight="700" {rot}>{cat}</text>'
             )
             for mi, mk in enumerate(models):
                 score = data[mk][ci]
@@ -442,7 +476,8 @@ class ChartRenderer:
                 color = self.colors[mi % len(self.colors)]
                 bars.append(
                     f'<rect x="{bx:.1f}" y="{by:.1f}" width="{max(bw - 2, 2)}" height="{bh:.1f}" '
-                    f'fill="{color}" rx="1.5" class="bar-rect" data-model="{mi}"/>'
+                    f'fill="{color}" stroke="var(--ink)" stroke-width="1" class="bar-rect" data-model="{mi}">'
+                    f'<title>{_safe_name(mk)}: {score:.1f}</title></rect>'
                 )
                 if show_labels:
                     bars.append(
@@ -477,17 +512,12 @@ class ChartRenderer:
             for mi, mk in enumerate(models):
                 score = data.get(mk, {}).get(cat, 0)
                 ratio = score / 10.0
-                # HSL interpolation: low=red(0,60%,45%), high=green(140,55%,40%)
-                if ratio < 0.5:
-                    h = 0 + (ratio * 2) * 35
-                    s = 55 + (ratio * 2) * 10
-                    l = 50 - (ratio * 2) * 10
-                else:
-                    h = 35 + ((ratio - 0.5) * 2) * 105
-                    s = 65 - ((ratio - 0.5) * 2) * 10
-                    l = 40 + ((ratio - 0.5) * 2) * 10
+                # HSL interpolation: low=red(0,70%,50%), high=green(120,55%,38%)
+                h = ratio * 120
+                s = 70 - ratio * 15
+                l = 52 - ratio * 14
                 color = _hsl_to_hex(h, s, l)
-                tc = "#fff" if ratio < 0.35 or ratio > 0.75 else "var(--ink)"
+                tc = "#fff" if ratio > 0.52 else "var(--ink)"
                 cells.append(
                     f'<div class="heatmap-cell" style="background:{color};color:{tc};font-size:{font_size};" '
                     f'title="{_safe_name(mk)} · {CATEGORY_NAMES[cat]}: {score:.1f}">{score:.1f}</div>'
@@ -508,26 +538,21 @@ class ChartRenderer:
         for i in range(11):
             val = i
             ratio = val / 10.0
-            if ratio < 0.5:
-                h = 0 + (ratio * 2) * 35
-                s = 55 + (ratio * 2) * 10
-                l = 50 - (ratio * 2) * 10
-            else:
-                h = 35 + ((ratio - 0.5) * 2) * 105
-                s = 65 - ((ratio - 0.5) * 2) * 10
-                l = 40 + ((ratio - 0.5) * 2) * 10
+            h = ratio * 120
+            s = 70 - ratio * 15
+            l = 52 - ratio * 14
             c = _hsl_to_hex(h, s, l)
             scale_cells += f'<div class="heatmap-scale-cell" style="background:{c}"></div>'
 
         return (
             f'<div class="heatmap-wrap">\n'
-            f'<div class="heatmap-grid" style="grid-template-columns: 120px repeat({len(models)}, 1fr);">\n'
+            f'<div class="heatmap-grid" style="grid-template-columns: 140px repeat({len(models)}, 1fr);">\n'
             f'<div class="heatmap-corner">Dimension \\ Model</div>\n'
             f'{headers}{rows}</div>\n'
             f'<div class="heatmap-scale">\n'
-            f'<span class="heatmap-scale-label">0</span>\n'
+            f'<span class="heatmap-scale-label" style="font-family:Libre Baskerville,serif;font-size:10px;font-weight:700;">0</span>\n'
             f'{scale_cells}\n'
-            f'<span class="heatmap-scale-label">10</span>\n'
+            f'<span class="heatmap-scale-label" style="font-family:Libre Baskerville,serif;font-size:10px;font-weight:700;">10</span>\n'
             f'</div></div>'
         )
 
@@ -538,214 +563,253 @@ _CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400&family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap');
 
 :root {
-  --paper: #F5F0E8;
-  --card: #FAF7F0;
-  --ink: #1A1410;
-  --ink-light: #3D3530;
-  --muted: #6B5E54;
-  --rule: #1A1410;
-  --rule-light: #C8B89A;
-  --accent: #8B1A1A;
-  --accent-light: #B85C5C;
-  --gold: #7A6A4E;
-  --silver: #5A6B7A;
-  --bronze: #7A5A3E;
+  --paper: #f4f1ea;
+  --card: transparent;
+  --ink: #111111;
+  --ink-light: #333333;
+  --muted: #555555;
+  --rule: #111111;
+  --rule-light: #d4cfc5;
+  --accent: #b22222;
+  --accent-light: #d65c5c;
   --success: #3A5A3A;
   --danger: #7A2A2A;
-  --shadow: rgba(26,20,16,0.06);
+  --shadow: rgba(0,0,0,0.05);
   --transition: 0.2s ease;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #1A1814;
-    --card: #242018;
-    --ink: #E8E0D8;
-    --ink-light: #C8C0B8;
-    --muted: #A09888;
-    --rule: #E8E0D8;
-    --rule-light: #5A5048;
-    --accent: #C85C5C;
-    --accent-light: #D88C8C;
-    --gold: #A89878;
-    --silver: #8898A8;
-    --bronze: #A88868;
+    --paper: #1a1a1a;
+    --card: transparent;
+    --ink: #e6e6e6;
+    --ink-light: #cccccc;
+    --muted: #999999;
+    --rule: #e6e6e6;
+    --rule-light: #444444;
+    --accent: #d34040;
+    --accent-light: #e07070;
     --success: #6A9A6A;
     --danger: #B85A5A;
-    --shadow: rgba(0,0,0,0.2);
   }
+  .kpi-grid { background: rgba(255,255,255,0.02); }
+  .warn-box { background: rgba(255,255,255,0.02); }
+  table tr:hover td { background: rgba(255,255,255,0.03); }
+  .heatmap-cell { border: 1px solid rgba(0,0,0,0.5); }
 }
 
-*{box-sizing:border-box}
+* { box-sizing: border-box; }
 
 body {
-  margin:0; padding:0;
-  background:var(--paper);
-  color:var(--ink);
-  font-family:'EB Garamond',Georgia,serif;
-  line-height:1.65;
-  -webkit-font-smoothing:antialiased;
-  transition:background var(--transition), color var(--transition);
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'EB Garamond', Georgia, serif;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* Subtle paper texture overlay */
 body::before {
-  content:'';
-  position:fixed; top:0; left:0; right:0; bottom:0;
-  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
-  pointer-events:none; z-index:9999;
+  content: '';
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none; z-index: 9999;
 }
 
-.container {max-width:960px; margin:0 auto; padding:0 48px}
+.container { max-width: 1024px; margin: 0 auto; padding: 0 40px; }
 
-h1,h2,h3,h4 {
-  font-family:'Playfair Display',Georgia,serif;
-  margin:0; font-weight:600; letter-spacing:-0.01em;
+h1, h2, h3, h4 {
+  font-family: 'Playfair Display', Georgia, serif;
+  margin: 0; color: var(--ink);
 }
 
-h1 {font-size:56px; line-height:0.95}
-h2 {font-size:26px; line-height:1.15; margin-top:48px; margin-bottom:18px; padding-bottom:10px; border-bottom:1px solid var(--rule-light)}
-h3 {font-size:18px; line-height:1.3; margin-top:32px; margin-bottom:12px}
-h4 {font-size:10px; font-family:'EB Garamond',serif; font-weight:700; text-transform:uppercase; letter-spacing:0.15em; color:var(--muted); margin-bottom:8px}
+/* Masthead - Newspaper Style */
+.masthead {
+  text-align: center;
+  padding: 40px 0 0;
+  margin-bottom: 40px;
+}
+.masthead-title-wrap {
+  border-top: 6px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  padding: 24px 0 16px;
+  margin-bottom: 8px;
+}
+.masthead h1 {
+  font-size: 80px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+.masthead .tagline {
+  font-family: 'EB Garamond', serif;
+  font-size: 18px;
+  font-style: italic;
+  color: var(--ink-light);
+  margin-top: 12px;
+}
+.edition-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--ink);
+  border-bottom: 4px solid var(--ink);
+  padding: 6px 0;
+  font-family: 'Libre Baskerville', serif;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+.edition-line span { padding: 0 8px; }
 
-/* Masthead */
-.masthead {text-align:center; padding:56px 0 32px; border-bottom:3px double var(--rule); margin-bottom:40px}
-.masthead h1 {font-family:'Playfair Display',Georgia,serif; font-size:76px; font-weight:900; letter-spacing:-0.03em; line-height:0.9; margin-bottom:14px; color:var(--ink)}
-.masthead .tagline {font-family:'EB Garamond',serif; font-size:16px; font-style:italic; color:var(--muted); letter-spacing:0.04em; margin-bottom:6px}
-.masthead .edition-line {font-family:'Libre Baskerville',serif; font-size:10px; text-transform:uppercase; letter-spacing:0.15em; color:var(--muted); margin-top:18px; padding-top:14px; border-top:1px solid var(--rule-light)}
-.masthead .edition-line span {margin:0 14px}
+/* Typography elements */
+h2 {
+  font-size: 32px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: 8px;
+  margin: 48px 0 24px;
+}
+h3 {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 32px 0 16px;
+  font-style: italic;
+}
 
-/* Cards & Boxes */
-.card {background:var(--card); padding:24px; border:1px solid var(--rule-light); margin-bottom:20px; box-shadow:0 1px 3px var(--shadow); transition:box-shadow var(--transition)}
-.card:hover {box-shadow:0 4px 12px var(--shadow)}
-.warn-box {background:rgba(184,92,92,0.08); border:1px solid rgba(184,92,92,0.3); padding:14px; margin:20px 0; font-family:'EB Garamond',serif; font-size:13px; color:var(--danger); border-radius:2px}
-.warn-box strong {color:var(--danger); font-weight:700}
-.warn-box code {background:rgba(184,92,92,0.12); padding:1px 4px; border-radius:2px; font-size:12px}
+/* Cards -> Sections */
+.card, .chart-card {
+  margin-bottom: 40px;
+}
+.chart-title { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 900; text-transform: uppercase; border-bottom: 1px solid var(--ink); display: inline-block; padding-bottom: 4px; margin-bottom: 8px; }
+.chart-subtitle { font-family: 'EB Garamond', serif; font-style: italic; font-size: 14px; color: var(--muted); margin-bottom: 24px; }
 
-/* KPI */
-.kpi-grid {display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); margin:32px 0}
-.kpi-card {text-align:center; padding:22px 12px; border-right:1px solid var(--rule-light); transition:background var(--transition)}
-.kpi-card:last-child {border-right:none}
-.kpi-card:hover {background:rgba(139,26,26,0.03)}
-.kpi-value {font-family:'Libre Baskerville',serif; font-size:34px; font-weight:700; color:var(--accent); line-height:1; margin-bottom:6px}
-.kpi-label {font-family:'EB Garamond',serif; font-size:10px; text-transform:uppercase; letter-spacing:0.14em; color:var(--muted)}
-.kpi-sub {font-family:'EB Garamond',serif; font-size:11px; color:var(--muted); margin-top:4px; opacity:0.7}
+/* KPI Box */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 4px solid var(--ink);
+  border-bottom: 4px solid var(--ink);
+  margin: 32px 0;
+  background: rgba(0,0,0,0.02);
+}
+.kpi-card {
+  text-align: center;
+  padding: 24px 16px;
+  border-right: 1px solid var(--rule-light);
+}
+.kpi-card:last-child { border-right: none; }
+.kpi-value { font-family: 'Playfair Display', serif; font-size: 48px; font-weight: 900; color: var(--ink); line-height: 1; margin-bottom: 8px; }
+.kpi-label { font-family: 'Libre Baskerville', serif; font-size: 11px; text-transform: uppercase; font-weight: 700; letter-spacing: 0.1em; color: var(--accent); }
+.kpi-sub { font-family: 'EB Garamond', serif; font-size: 13px; color: var(--muted); font-style: italic; margin-top: 4px; }
 
 /* Tables */
-table {width:100%; border-collapse:collapse; font-size:13px; font-family:'EB Garamond',serif; margin:16px 0}
-th {font-family:'Playfair Display',serif; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.1em; color:var(--muted); border-bottom:2px solid var(--rule); padding:10px 10px; text-align:left; vertical-align:bottom}
-td {padding:10px 10px; border-bottom:1px solid var(--rule-light); vertical-align:middle; transition:background var(--transition)}
-tr:hover td {background:rgba(139,26,26,0.03)}
-.rank-1 {color:var(--accent); font-weight:700; font-family:'Libre Baskerville',serif}
-.rank-2 {color:var(--silver); font-weight:700; font-family:'Libre Baskerville',serif}
-.rank-3 {color:var(--bronze); font-weight:700; font-family:'Libre Baskerville',serif}
-.score-badge {font-family:'Libre Baskerville',serif; font-size:13px; font-weight:700; padding:1px 8px; border:1px solid var(--rule-light); background:transparent; color:var(--ink); white-space:nowrap}
+table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 24px 0; border-top: 3px solid var(--ink); border-bottom: 3px solid var(--ink); }
+th { font-family: 'Libre Baskerville', serif; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--ink); border-bottom: 1px solid var(--ink); padding: 12px 8px; text-align: left; vertical-align: bottom; }
+td { padding: 12px 8px; border-bottom: 1px solid var(--rule-light); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(0,0,0,0.03); }
+.rank-1 { font-family: 'Playfair Display', serif; font-size: 18px; font-weight: 900; color: var(--accent); }
+.score-badge { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; }
 
-/* Progress */
-.progress-track {width:100%; height:3px; background:var(--rule-light); border-radius:2px; overflow:hidden}
-.progress-fill {height:100%; background:var(--accent); border-radius:2px; transition:width 0.6s ease}
+/* Warning */
+.warn-box { border: 2px solid var(--ink); padding: 16px; margin: 24px 0; font-style: italic; font-size: 15px; border-left: 6px solid var(--accent); background: rgba(0,0,0,0.02); }
+.warn-box strong { font-family: 'Libre Baskerville', serif; font-weight: 700; font-style: normal; text-transform: uppercase; font-size: 12px; color: var(--accent); display: block; margin-bottom: 4px; }
+.warn-box code { background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 2px; }
 
-/* Detail Cards */
-.detail-card {background:var(--card); padding:20px; border:1px solid var(--rule-light); margin-bottom:12px; box-shadow:0 1px 2px var(--shadow); transition:box-shadow var(--transition)}
-.detail-card:hover {box-shadow:0 3px 8px var(--shadow)}
-.detail-header {display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px; flex-wrap:wrap; gap:8px}
-.detail-title {font-family:'Playfair Display',serif; font-size:17px; font-weight:600}
-.detail-score {font-family:'Libre Baskerville',serif; font-size:24px; font-weight:700; color:var(--accent)}
-.detail-meta {font-family:'EB Garamond',serif; font-size:11px; color:var(--muted); margin-bottom:10px; text-transform:uppercase; letter-spacing:0.06em}
-.detail-reasoning {font-family:'EB Garamond',serif; font-size:14px; color:var(--ink-light); line-height:1.7; padding:14px; background:rgba(200,184,154,0.08); border-left:2px solid var(--accent)}
+/* Detail Cards -> Article layout */
+.detail-card { padding: 16px 0; border-bottom: 1px solid var(--rule-light); margin-bottom: 0; }
+.detail-card:last-child { border-bottom: none; }
+.detail-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.detail-title { font-family: 'Playfair Display', serif; font-size: 18px; font-weight: 900; }
+.detail-score { font-family: 'Playfair Display', serif; font-size: 24px; font-weight: 900; color: var(--accent); }
+.detail-meta { font-family: 'Libre Baskerville', serif; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.detail-reasoning { font-family: 'EB Garamond', serif; font-size: 15px; color: var(--ink-light); line-height: 1.6; padding-left: 16px; border-left: 3px solid var(--rule-light); margin: 12px 0; font-style: italic; background: rgba(0,0,0,0.02); padding-top: 8px; padding-bottom: 8px; }
 
 /* Tags */
-.tag {display:inline-block; padding:1px 7px; font-size:9px; font-weight:600; margin-right:4px; margin-bottom:3px; border:1px solid; text-transform:uppercase; letter-spacing:0.08em; font-family:'EB Garamond',serif; border-radius:1px}
-.tag-strength {color:var(--success); border-color:rgba(58,90,58,0.4); background:rgba(58,90,58,0.06)}
-.tag-weakness {color:var(--danger); border-color:rgba(122,42,42,0.4); background:rgba(122,42,42,0.06)}
+.tag { display: inline-block; padding: 2px 6px; font-size: 10px; font-weight: 700; margin-right: 6px; margin-bottom: 4px; text-transform: uppercase; font-family: 'Libre Baskerville', serif; background: var(--ink); color: var(--paper); }
+.tag-strength { background: var(--ink); }
+.tag-weakness { background: transparent; border: 1px solid var(--ink); color: var(--ink); }
 
-/* Charts */
-.chart-card {background:var(--card); padding:24px; border:1px solid var(--rule-light); margin-bottom:20px; box-shadow:0 1px 3px var(--shadow)}
-.chart-title {font-family:'Playfair Display',serif; font-size:18px; font-weight:600; margin-bottom:4px}
-.chart-subtitle {font-family:'EB Garamond',serif; font-style:italic; font-size:13px; color:var(--muted); margin-bottom:18px}
-.chart-wrap {text-align:center; margin:16px 0}
-.chart-legend {display:flex; flex-wrap:wrap; justify-content:center; margin-top:10px; gap:0 16px}
-.chart-legend-item {display:inline-flex; align-items:center; margin-bottom:5px; font-size:12px; color:var(--ink-light); font-family:'EB Garamond',serif; cursor:pointer; padding:2px 6px; border-radius:3px; transition:background var(--transition)}
-.chart-legend-item:hover {background:rgba(139,26,26,0.06)}
-.chart-legend-item.inactive {opacity:0.35}
-.chart-legend-dot {width:9px; height:9px; margin-right:6px; display:inline-block; border-radius:50%}
-.chart-legend-swatch {width:11px; height:11px; margin-right:6px; display:inline-block; border-radius:1px}
+/* Model Groups */
+.model-group { border-top: 2px solid var(--ink); padding-top: 16px; margin-bottom: 32px; }
+.model-group-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; cursor: pointer; }
+.model-group-title { font-family: 'Playfair Display', serif; font-size: 24px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.02em; }
+.model-group-toggle { font-family: 'Libre Baskerville', serif; font-size: 14px; font-weight: 700; transition: transform var(--transition); }
+.model-group.collapsed .model-group-toggle { transform: rotate(-90deg); }
+.model-group.collapsed .model-group-body { display: none; }
+.model-group.collapsed .model-group-header { margin-bottom: 0; }
+
+/* Stats Grid for Summaries */
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; background: var(--rule-light); border: 1px solid var(--rule-light); margin: 16px 0; }
+.stat-box { background: var(--paper); padding: 16px 12px; text-align: center; }
+.stat-value { font-family: 'Playfair Display', serif; font-size: 24px; font-weight: 900; line-height: 1; margin-bottom: 6px; color: var(--ink); }
+.stat-label { font-family: 'Libre Baskerville', serif; font-size: 10px; color: var(--muted); text-transform: uppercase; font-weight: 700; }
+
+/* Progress tracks */
+.progress-track { width: 100%; height: 4px; background: var(--rule-light); }
+.progress-fill { height: 100%; background: var(--ink); }
+
+/* Compare Grid */
+.compare-grid { display: grid; grid-template-columns: 140px repeat(auto-fit, minmax(100px, 1fr)); gap: 1px; background: var(--ink); border: 2px solid var(--ink); margin: 24px 0; }
+.compare-cell { background: var(--paper); padding: 12px; font-size: 14px; text-align: center; }
+.compare-cell.header { font-family: 'Libre Baskerville', serif; font-weight: 700; font-size: 11px; text-transform: uppercase; background: rgba(0,0,0,0.05); }
+.compare-cell.model { font-family: 'Playfair Display', serif; font-weight: 900; text-align: left; background: rgba(0,0,0,0.02); }
+
+/* Charts Layout */
+.chart-wrap { margin: 24px 0; display: flex; flex-direction: column; align-items: center; }
+.chart-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 16px; border-top: 1px solid var(--rule-light); padding-top: 16px; width: 100%; }
+.chart-legend-item { font-family: 'Libre Baskerville', serif; font-size: 11px; font-weight: 700; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; opacity: 0.8; }
+.chart-legend-item:hover { opacity: 1; }
+.chart-legend-item.inactive { opacity: 0.3; }
+.chart-legend-swatch { width: 12px; height: 12px; margin-right: 6px; border: 1px solid var(--ink); }
+.chart-legend-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; border: 1px solid var(--ink); }
 
 /* Radar interactions */
-.radar-poly {transition:opacity var(--transition), stroke-width var(--transition)}
-.radar-poly.dimmed {opacity:0.15}
-.radar-poly.highlighted {stroke-width:2.5; opacity:1}
+.radar-poly { transition: opacity var(--transition), stroke-width var(--transition), fill-opacity var(--transition); fill-opacity: 0.6; mix-blend-mode: multiply; }
+.radar-poly.dimmed { opacity: 0.05; }
+.radar-poly.highlighted { stroke-width: 3.5; opacity: 1; fill-opacity: 0.9; }
+.radar-dot { transition: opacity var(--transition), r var(--transition); }
+.radar-dot.dimmed { opacity: 0; }
+.radar-dot.highlighted { r: 5; stroke-width: 1.5; }
+
+@media (prefers-color-scheme: dark) {
+  .radar-poly { mix-blend-mode: screen; }
+}
 
 /* Bar interactions */
-.bar-rect {transition:opacity var(--transition)}
-.bar-rect.dimmed {opacity:0.15}
-.bar-rect.highlighted {opacity:1; filter:brightness(1.1)}
+.bar-rect { transition: opacity var(--transition); }
+.bar-rect.dimmed { opacity: 0.15; }
+.bar-rect.highlighted { opacity: 1; filter: brightness(1.1); }
 
 /* Heatmap */
-.heatmap-wrap {overflow-x:auto; margin:16px 0}
-.heatmap-grid {display:grid; gap:3px; align-items:center; min-width:fit-content}
-.heatmap-corner {font-weight:700; font-size:11px; color:var(--muted); text-align:right; padding-right:10px; font-family:'EB Garamond',serif}
-.heatmap-header {font-weight:700; color:var(--muted); text-align:center; padding:6px 2px; font-family:'EB Garamond',serif}
-.heatmap-rowlabel {font-weight:600; font-size:12px; color:var(--muted); text-align:right; padding-right:10px; font-family:'EB Garamond',serif}
-.heatmap-cell {display:flex; align-items:center; justify-content:center; font-weight:600; padding:5px 0; font-family:'Libre Baskerville',serif; min-width:36px; border-radius:2px; transition:transform 0.15s ease, box-shadow 0.15s ease}
-.heatmap-cell:hover {transform:scale(1.08); box-shadow:0 2px 6px rgba(0,0,0,0.15); z-index:1; position:relative}
-.heatmap-scale {display:flex; align-items:center; gap:2px; margin-top:10px; justify-content:flex-end; padding-right:4px}
-.heatmap-scale-cell {width:18px; height:12px; border-radius:1px}
-.heatmap-scale-label {font-size:10px; color:var(--muted); font-family:'Libre Baskerville',serif; margin:0 4px}
+.heatmap-wrap { overflow-x: auto; margin: 24px 0; border: 2px solid var(--ink); padding: 2px; }
+.heatmap-grid { display: grid; gap: 1px; background: var(--ink); }
+.heatmap-corner, .heatmap-header, .heatmap-rowlabel, .heatmap-cell { background: var(--paper); padding: 8px; }
+.heatmap-corner { font-family: 'Libre Baskerville', serif; font-size: 10px; font-weight: 700; text-transform: uppercase; text-align: right; }
+.heatmap-header { font-family: 'Playfair Display', serif; font-size: 12px; font-weight: 900; text-align: center; }
+.heatmap-rowlabel { font-family: 'Libre Baskerville', serif; font-size: 11px; font-weight: 700; text-transform: uppercase; text-align: right; }
+.heatmap-cell { font-family: 'Libre Baskerville', serif; text-align: center; font-weight: 700; transition: filter 0.2s; border: 1px solid rgba(0,0,0,0.05); }
+.heatmap-cell:hover { filter: brightness(1.1) saturate(1.2); }
+.heatmap-scale { display: flex; justify-content: flex-end; padding: 8px 0 0; }
+.heatmap-scale-cell { width: 24px; height: 8px; }
 
-/* Model Group */
-.model-group {margin-bottom:28px; border-top:1px solid var(--rule); padding-top:16px}
-.model-group-header {display:flex; justify-content:space-between; align-items:baseline; margin-bottom:12px; flex-wrap:wrap; gap:10px; cursor:pointer; user-select:none}
-.model-group-header:hover .model-group-title {color:var(--accent)}
-.model-group-title {font-family:'Playfair Display',serif; font-size:18px; font-weight:600; transition:color var(--transition)}
-.model-group-toggle {font-size:12px; color:var(--muted); font-family:'EB Garamond',serif; transition:transform var(--transition)}
-.model-group.collapsed .model-group-toggle {transform:rotate(-90deg)}
-.model-group.collapsed .model-group-body {display:none}
+/* Buttons */
+.action-bar { border-bottom: 2px solid var(--ink); padding-bottom: 16px; margin-bottom: 32px; text-align: right; }
+.btn { display: inline-flex; align-items: center; gap: 8px; font-family: 'Libre Baskerville', serif; font-size: 11px; font-weight: 700; text-transform: uppercase; background: var(--ink); color: var(--paper); border: none; padding: 8px 16px; cursor: pointer; transition: background 0.2s; border-radius: 0; }
+.btn:hover { background: var(--accent); color: var(--paper); }
+.btn svg { width: 14px; height: 14px; }
+
+.scroll-h { overflow-x: auto; }
 
 /* Footer */
-.report-footer {text-align:center; padding:40px 0; border-top:3px double var(--rule); margin-top:48px; font-family:'EB Garamond',serif; font-size:12px; color:var(--muted); letter-spacing:0.06em}
-.report-footer .footer-name {font-family:'Playfair Display',serif; font-size:20px; font-weight:600; margin-bottom:8px; color:var(--ink)}
-
-/* Section label */
-.section-label {font-family:'EB Garamond',serif; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.2em; color:var(--accent); margin-bottom:6px}
-
-/* Editorial columns */
-.editorial-columns {display:grid; grid-template-columns:repeat(3,1fr); gap:24px; margin:24px 0}
-.editorial-column {border-left:1px solid var(--rule-light); padding-left:16px}
-.editorial-column:first-child {border-left:none; padding-left:0}
-.editorial-column h4 {margin-bottom:8px}
-.editorial-column p {font-size:13px; color:var(--ink-light); line-height:1.6; margin:0}
-
-/* Stats grid */
-.stats-grid {display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:16px; margin:16px 0}
-.stat-box {text-align:center; padding:12px; border:1px solid var(--rule-light); background:var(--card)}
-.stat-value {font-family:'Libre Baskerville',serif; font-size:22px; font-weight:700; color:var(--accent); line-height:1.1}
-.stat-label {font-family:'EB Garamond',serif; font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:0.12em; margin-top:6px}
-
-/* Comparison matrix */
-.compare-grid {display:grid; grid-template-columns:140px repeat(auto-fit, minmax(100px, 1fr)); gap:1px; background:var(--rule-light); border:1px solid var(--rule-light); margin:16px 0}
-.compare-cell {background:var(--card); padding:10px; font-size:12px; font-family:'EB Garamond',serif}
-.compare-cell.header {font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; font-size:10px}
-.compare-cell.model {font-weight:600; font-family:'Playfair Display',serif}
-
-/* Action buttons */
-.action-bar {display:flex; gap:10px; margin:20px 0; flex-wrap:wrap}
-.btn {display:inline-flex; align-items:center; gap:6px; padding:6px 14px; font-family:'EB Garamond',serif; font-size:12px; font-weight:600; color:var(--ink); background:var(--card); border:1px solid var(--rule-light); cursor:pointer; text-decoration:none; transition:all var(--transition); border-radius:2px}
-.btn:hover {background:var(--accent); color:#fff; border-color:var(--accent)}
-.btn svg {width:14px; height:14px}
-
-/* Scroll */
-.scroll-h {overflow-x:auto}
-
-/* Tooltip */
-.tooltip {position:relative}
-.tooltip::after {
-  content:attr(data-tip);
-  position:absolute; bottom:120%; left:50%; transform:translateX(-50%);
-  background:var(--ink); color:var(--paper); padding:4px 8px; border-radius:3px;
-  font-size:11px; font-family:'EB Garamond',serif; white-space:nowrap;
-  opacity:0; pointer-events:none; transition:opacity var(--transition); z-index:100;
-}
-.tooltip:hover::after {opacity:1}
+.report-footer { border-top: 4px solid var(--ink); text-align: center; padding: 40px 0; margin-top: 64px; font-family: 'Libre Baskerville', serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink); }
+.footer-name { font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 900; margin-bottom: 12px; letter-spacing: 0; text-transform: none; }
 
 @media(max-width:768px){
   .container{padding:0 20px}
@@ -754,9 +818,6 @@ tr:hover td {background:rgba(139,26,26,0.03)}
   .kpi-grid{grid-template-columns:repeat(2,1fr)}
   .kpi-card:nth-child(2n){border-right:none}
   .kpi-card{border-bottom:1px solid var(--rule-light)}
-  .editorial-columns{grid-template-columns:1fr}
-  .editorial-column{border-left:none; padding-left:0; border-top:1px solid var(--rule-light); padding-top:12px}
-  .editorial-column:first-child{border-top:none; padding-top:0}
 }
 
 @media print {
@@ -786,7 +847,7 @@ document.addEventListener('DOMContentLoaded', function() {
     item.addEventListener('mouseenter', function() {
       var idx = this.getAttribute('data-model');
       if (idx === null) return;
-      document.querySelectorAll('.radar-poly, .bar-rect').forEach(function(el) {
+      document.querySelectorAll('.radar-poly, .bar-rect, .radar-dot').forEach(function(el) {
         if (el.getAttribute('data-model') === idx) {
           el.classList.add('highlighted');
           el.classList.remove('dimmed');
@@ -797,7 +858,7 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
     item.addEventListener('mouseleave', function() {
-      document.querySelectorAll('.radar-poly, .bar-rect').forEach(function(el) {
+      document.querySelectorAll('.radar-poly, .bar-rect, .radar-dot').forEach(function(el) {
         el.classList.remove('highlighted', 'dimmed');
       });
     });
@@ -873,27 +934,6 @@ class ReportGenerator:
     def _model_name(self, mk: str) -> str:
         return _safe_name(mk)
 
-    def _generate_csv_data(self) -> str:
-        """Generate CSV data for embedded export."""
-        output = io.StringIO()
-        writer = csv.writer(output)
-        header = ["Rank", "Model", "Overall", "Median", "StdDev"] + [CATEGORY_NAMES[c] for c in CATEGORY_ORDER] + ["Speed", "Code Pass"]
-        writer.writerow(header)
-        for rank, mk in enumerate(self.models, 1):
-            ms = self.stats[mk]
-            row = [
-                rank, self._model_name(mk),
-                f"{ms.avg_overall:.2f}",
-                f"{ms.median_overall:.2f}",
-                f"{ms.std_overall:.2f}",
-            ]
-            for c in CATEGORY_ORDER:
-                row.append(f"{ms.cat_avg(c):.1f}")
-            row.append(f"{ms.avg_speed:.1f}s")
-            row.append(f"{ms.code_passed}/{ms.code_total}")
-            writer.writerow(row)
-        return output.getvalue()
-
     def generate(self, output_path: str) -> None:
         hb = HTMLBuilder()
 
@@ -918,19 +958,31 @@ class ReportGenerator:
         hb.add(
             '<header class="masthead">',
             '<div class="container">',
+            '<div class="masthead-title-wrap">',
             '<h1>VeilBench</h1>',
             f'<p class="tagline">{subtitle}</p>',
+            '</div>',
             '<div class="edition-line">',
-            f'<span>{datetime.now().strftime("%B %d, %Y")}</span>',
-            f'<span>{self.n_models} Models</span>',
-            f'<span>{len(ALL_TESTS)} Problems</span>',
-            f'<span>{len(CATEGORY_ORDER)} Dimensions</span>',
+            f'<span>Vol. 1 &mdash; {datetime.now().strftime("%B %d, %Y")}</span>',
+            '<span>' + ' &middot; '.join([
+                f'{self.n_models} Models',
+                f'{len(ALL_TESTS)} Problems',
+                f'{len(CATEGORY_ORDER)} Dimensions'
+            ]) + '</span>',
+            '<span>THE BENCHMARK</span>',
             '</div>',
             '</div>',
             '</header>',
         )
 
         hb.add('<main class="container">')
+
+        hb.add(
+            '<div style="column-count: 2; column-gap: 40px; margin-bottom: 32px; font-size: 15px; text-align: justify; border-bottom: 2px solid var(--ink); padding-bottom: 32px;">',
+            '<p style="margin-top:0;"><span style="float:left; font-family:\'Playfair Display\',serif; font-size:64px; line-height:0.8; padding-right:8px; padding-top:4px; font-weight:900;">T</span>his report provides an exhaustive multi-dimensional evaluation of reasoning models, testing their limits across logic, math, system design, and algorithmic tasks. The scoring methodology blends automated objective verification with blinded LLM-as-a-judge subjective evaluation.</p>',
+            '<p>The following sections present a comprehensive leaderboard, performance heatmaps, and granular breakdowns of each model\'s specific strengths and weaknesses. Evaluation integrity is maintained through fully anonymized prompts and reproducible sandboxed environments.</p>',
+            '</div>'
+        )
 
         # Warning box
         if self.is_obj_only:
