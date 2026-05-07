@@ -11,9 +11,7 @@ import argparse
 import copy
 import json
 import os
-import shutil
 import sys
-from datetime import datetime
 from config import MODELS, OBJECTIVE_WEIGHT, SUBJECTIVE_WEIGHT
 from prompts import ALL_TESTS
 from validators import run_objective_validation
@@ -37,17 +35,12 @@ def load_raw_results() -> dict:
 
 
 def _save_checkpoint(evaluated: dict, step: int, output_name: str = "evaluated_results.json"):
-    """增量保存评估结果到 results/<output_name>，并保留历史备份。"""
+    """增量保存评估结果到 results/<output_name>。"""
     os.makedirs(RESULTS_DIR, exist_ok=True)
     path = os.path.join(RESULTS_DIR, output_name)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(evaluated, f, ensure_ascii=False, indent=2)
-    # 保留带时间戳的备份
-    base = output_name.rsplit(".", 1)[0]
-    ts = datetime.now().strftime("%m%d_%H%M%S")
-    backup = os.path.join(RESULTS_DIR, f"{base}_T{step:02d}_{ts}.json")
-    shutil.copy2(path, backup)
-    print(f"  [CHECKPOINT] 已保存至 {path} (备份: {backup})", flush=True)
+    print(f"  [CHECKPOINT] 已保存至 {path} ({step} 题)", flush=True)
 
 
 def blend_scores(obj_score, subj_score) -> float:
@@ -60,7 +53,9 @@ def blend_scores(obj_score, subj_score) -> float:
 def main():
     parser = argparse.ArgumentParser(description="VeilBench 匿名评估")
     parser.add_argument("--models", type=str, default=None,
-                        help="仅评估指定模型（逗号分隔），结果合并到已有 evaluated_results.json")
+                        help="前置检查：确保指定模型有数据后才开始评估")
+    parser.add_argument("--only-complete", action="store_true",
+                        help="仅评估所有模型都已完成的题目")
     args = parser.parse_args()
 
     target_models = set(args.models.split(",")) if args.models else None
@@ -77,32 +72,72 @@ def main():
     if skipped:
         print(f"[SKIP] 无数据，跳过: {skipped}", flush=True)
 
-    # judge_model_keys: 展示给评委评分的所有模型（保证公平比较）
-    # eval_model_keys: 真正需要保存结果的模型
+    # --models: 前置检查，确保指定模型有数据
     if target_models:
-        judge_model_keys = all_model_keys
-        eval_model_keys = [mk for mk in all_model_keys if mk in target_models]
         missing = target_models - set(all_model_keys)
         if missing:
-            print(f"[WARN] 指定模型无数据，将跳过: {missing}", flush=True)
-        if not eval_model_keys:
-            print("Error: No matching models with data to evaluate.", flush=True)
+            print(f"Error: 指定模型无数据: {missing}", flush=True)
             sys.exit(1)
-        print(f"[INFO] 仅评估: {eval_model_keys}", flush=True)
-        print(f"[INFO] 评委可见全部 {len(judge_model_keys)} 个模型（保证公平比较）\n", flush=True)
+
+    # 评估所有有数据的模型，共同评分，保证公平比较
+    model_keys = all_model_keys
+    existing_path = os.path.join(RESULTS_DIR, "evaluated_results.json")
+
+    # --only-complete: 过滤出所有模型都有答案的题目，并跳过已评估的
+    tests_to_eval = ALL_TESTS
+    if args.only_complete:
+        # 加载已有评估结果，避免重复评估
+        already_evaluated = set()
+        if os.path.exists(existing_path):
+            with open(existing_path, 'r', encoding='utf-8') as f:
+                existing_eval = json.load(f)
+            # 已评估的题目：所有模型都有评分结果的 test_id
+            for t in ALL_TESTS:
+                if all(
+                    any(r.get("test_id") == t.id and r.get("evaluation", {}).get("success")
+                        for r in existing_eval.get(mk, []))
+                    for mk in model_keys
+                ):
+                    already_evaluated.add(t.id)
+            if already_evaluated:
+                print(f"[INFO] --only-complete: 已有 {len(already_evaluated)} 道题已评估，跳过", flush=True)
+
+        tests_to_eval = []
+        for t in ALL_TESTS:
+            if t.id in already_evaluated:
+                continue
+            if all(
+                any(r.get("test_id") == t.id and r.get("success")
+                    for r in raw_results.get(mk, []))
+                for mk in model_keys
+            ):
+                tests_to_eval.append(t)
+        skipped = len(ALL_TESTS) - len(tests_to_eval) - len(already_evaluated)
+        if skipped > 0:
+            print(f"[INFO] --only-complete: 跳过 {skipped} 道未全部完成的题目", flush=True)
+        if not tests_to_eval:
+            print("No new complete tests to evaluate.", flush=True)
+            sys.exit(0)
+        print(f"[INFO] --only-complete: 新待评估 {len(tests_to_eval)} 道题", flush=True)
+
+    print(f"[INFO] 评估模型: {model_keys} ({len(model_keys)} 个)", flush=True)
+    print(f"[INFO] 共 {len(tests_to_eval)} 道题需要评估\n", flush=True)
+
+    # --only-complete: 加载已有评估结果作为基础，新结果追加
+    if args.only_complete and os.path.exists(existing_path):
+        with open(existing_path, 'r', encoding='utf-8') as f:
+            evaluated = json.load(f)
+        # 确保 model_keys 都有键
+        for mk in model_keys:
+            if mk not in evaluated:
+                evaluated[mk] = []
+        print(f"[INFO] 加载已有评估结果，共 {sum(len(v) for v in evaluated.values())} 条记录", flush=True)
     else:
-        judge_model_keys = all_model_keys
-        eval_model_keys = all_model_keys
-        print(f"[INFO] 评估模型: {all_model_keys} ({len(all_model_keys)} 个)", flush=True)
-    print(f"[INFO] 共 {len(ALL_TESTS)} 道题需要评估\n", flush=True)
+        evaluated = {mk: [] for mk in model_keys}
 
-    evaluated = {mk: [] for mk in eval_model_keys}
+    checkpoint_path = "evaluated_results.json"
 
-    # --models 模式：增量保存到临时文件，避免覆盖已有评估结果
-    checkpoint_path = "evaluated_results_partial.json" if target_models else "evaluated_results.json"
-    eval_output_path = os.path.join(RESULTS_DIR, checkpoint_path)
-
-    for idx, test_case in enumerate(ALL_TESTS, 1):
+    for idx, test_case in enumerate(tests_to_eval, 1):
         print(f"\n{'=' * 60}", flush=True)
         print(f"【题目 {idx}/{len(ALL_TESTS)}】{test_case.id} - {test_case.name}", flush=True)
         print(f"类型: {test_case.category} | 客观验证: {test_case.objective_type}", flush=True)
@@ -110,7 +145,7 @@ def main():
 
         model_answers = {}
         obj_results = {}
-        for mk in judge_model_keys:
+        for mk in model_keys:
             for r in raw_results.get(mk, []):
                 if r.get("test_id") == test_case.id and r.get("success"):
                     model_answers[mk] = r["answer"]
@@ -128,7 +163,7 @@ def main():
 
         if len(model_answers) < 1:
             print(f"  [SKIP] 无任何有效答案，跳过评分", flush=True)
-            for mk in eval_model_keys:
+            for mk in model_keys:
                 found = False
                 for r in raw_results.get(mk, []):
                     if r.get("test_id") == test_case.id:
@@ -161,7 +196,7 @@ def main():
         print(f"  [JUDGE] 发送 {len(model_answers)} 个匿名答案共同评分...", flush=True)
         eval_results = evaluate_all_models_single_prompt(test_case, model_answers)
 
-        for mk in eval_model_keys:
+        for mk in model_keys:
             ev = eval_results.get(mk, {})
             obj_val = obj_results.get(mk, {})
             obj_score = obj_val.get("score")
@@ -205,19 +240,6 @@ def main():
         # 每道题完成后增量保存
         _save_checkpoint(evaluated, idx, checkpoint_path)
 
-    # 如果指定了 --models，合并到已有评估结果中
-    if target_models:
-        existing_path = os.path.join(RESULTS_DIR, "evaluated_results.json")
-        if os.path.exists(existing_path):
-            print(f"\n[INFO] 合并到已有评估结果...", flush=True)
-            with open(existing_path, 'r', encoding='utf-8') as f:
-                existing = json.load(f)
-            for mk in eval_model_keys:
-                existing[mk] = evaluated[mk]
-            evaluated = existing
-        else:
-            print(f"\n[WARN] 未找到已有评估结果，仅保存新模型", flush=True)
-
     z_scores = compute_z_scores(evaluated)
     if z_scores:
         print(f"\n[INFO] z-score 标准化完成", flush=True)
@@ -228,7 +250,7 @@ def main():
                     r.setdefault("evaluation", {})["z_score"] = round(z_scores[mk][tid], 2)
 
     # z-score 更新后的最终保存
-    _save_checkpoint(evaluated, len(ALL_TESTS))
+    _save_checkpoint(evaluated, len(tests_to_eval))
     print(f"\n评分完成！运行 'python3 report.py' 生成报告。", flush=True)
 
 
