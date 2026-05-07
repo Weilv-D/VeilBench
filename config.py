@@ -74,6 +74,22 @@ MODELS = {
         "thinking_mode": True,
         "reasoning_effort": None,
     },
+    "glm-5.1": {
+        "name": "glm-5.1 (xhigh)",
+        "api_base": "http://127.0.0.1:8317/v1",
+        "api_key": "0796",
+        "model_id": "glm-5.1(xhigh)",
+        "thinking_mode": True,
+        "reasoning_effort": None,
+    },
+    "kimi-k2.6": {
+        "name": "kimi-k2.6 (xhigh)",
+        "api_base": "http://127.0.0.1:8317/v1",
+        "api_key": "0796",
+        "model_id": "kimi-k2.6(xhigh)",
+        "thinking_mode": True,
+        "reasoning_effort": None,
+    },
 }
 
 
@@ -116,6 +132,7 @@ def generate_anon_map(model_keys: list) -> dict:
 COMMON_MODEL_SELF_REFS = [
     "DeepSeek", "deepseek", "Qwen", "qwen", "Kimi", "kimi",
     "Claude", "claude", "GPT", "gpt", "Gemini", "gemini",
+    "GLM", "glm", "ChatGLM", "chatglm", "智谱",
     "Llama", "llama", "Mistral", "mistral", "通义千问",
 ]
 
