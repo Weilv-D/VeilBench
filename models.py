@@ -25,6 +25,8 @@ class ModelClient:
             self.is_thinking_mode = self.config.get("thinking_mode", False)
             self.reasoning_effort = self.config.get("reasoning_effort")
 
+        self.model_max_tokens = self.config.get("max_tokens", MAX_TOKENS)
+
         self.client = OpenAI(
             api_key=self.config["api_key"],
             base_url=self.config["api_base"],
@@ -37,9 +39,11 @@ class ModelClient:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = None,
-        max_tokens: int = MAX_TOKENS,
+        max_tokens: int = None,
     ) -> dict:
         """调用模型生成回复，自动处理思考模式参数"""
+        if max_tokens is None:
+            max_tokens = self.model_max_tokens
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -71,6 +75,17 @@ class ModelClient:
             reasoning_content = getattr(msg, "reasoning_content", None) or None
             if not content and reasoning_content:
                 content = reasoning_content
+            if not content:
+                return {
+                    "success": False,
+                    "content": "",
+                    "reasoning_content": reasoning_content,
+                    "elapsed_time": elapsed,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "error": "Empty response from model",
+                }
             usage = response.usage
 
             return {

@@ -56,7 +56,7 @@ def run_model(model_key: str):
 
         result = None
         for attempt in range(1, MAX_RETRIES + 1):
-            result = client.generate(prompt=test.prompt, max_tokens=MAX_TOKENS)
+            result = client.generate(prompt=test.prompt)
             if result["success"]:
                 break
             print(f"[RETRY {attempt}/{MAX_RETRIES}] {model_key} - {test.id}: {result['error']}", flush=True)
@@ -121,7 +121,7 @@ def run_model(model_key: str):
 
             result = None
             for attempt in range(1, MAX_RETRIES + 1):
-                result = client.generate(prompt=test.prompt, max_tokens=MAX_TOKENS)
+                result = client.generate(prompt=test.prompt)
                 if result["success"]:
                     break
                 print(f"[RETRY-RETRY {attempt}/{MAX_RETRIES}] {model_key} - {test.id}: {result['error']}", flush=True)

@@ -6,6 +6,7 @@ VeilBench Scoring Engine
 """
 
 import json
+import os
 import re
 import math
 import random
@@ -104,14 +105,42 @@ def anonymize_answers_for_judge(test_case, model_answers: Dict[str, str]) -> Tup
 
 # ==================== 响应解析 ====================
 
+def _extract_outermost_array(text: str) -> str:
+    """从文本中提取最外层 JSON 数组（正确处理嵌套括号与字符串内字符）"""
+    start = text.find("[")
+    if start == -1:
+        return ""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ""
+
+
 def parse_multi_judge_response(content: str) -> List[dict]:
     """解析评委返回的 JSON 数组"""
-    json_match = re.search(r'```json\s*(\[.*?\])\s*```', content, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        json_match = re.search(r'\[.*?\]', content, re.DOTALL)
-        json_str = json_match.group(0) if json_match else content
+    fenced = re.search(r'```json\s*([\s\S]*?)```', content, re.DOTALL)
+    candidate = fenced.group(1).strip() if fenced else content.strip()
+    json_str = _extract_outermost_array(candidate)
+    if not json_str:
+        json_str = candidate
 
     try:
         results = json.loads(json_str)
@@ -142,11 +171,30 @@ def evaluate_all_models_single_prompt(test_case, model_answers: Dict[str, str]) 
     """
     多模型答案匿名共现，评委一次性评分。
     返回: {model_key: eval_result}
+    优先使用 results/_judge_cache/<test_id>.json 的评委结果（由 judge_runner 生成），
+    避免重复调用评委 API。
     """
-    prompt, anon_map = anonymize_answers_for_judge(test_case, model_answers)
-    reverse_map = {v: k for k, v in anon_map.items()}
+    cache_path = os.path.join("results", "_judge_cache", f"{test_case.id}.json")
+    if os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        cached_result = cache.get("response", {})
+        cached_complete = bool(cache.get("complete"))
+        if cached_result.get("success") and cached_complete:
+            print(f"    [CACHE] 使用缓存的评委评分 {test_case.id}", flush=True)
+            result = cached_result
+            reverse_map = {v: k for k, v in cache["anon_map"].items()}
+        else:
+            result = None
+            reverse_map = None
+    else:
+        result = None
+        reverse_map = None
 
-    result = run_single_judge(prompt)
+    if result is None:
+        prompt, anon_map = anonymize_answers_for_judge(test_case, model_answers)
+        reverse_map = {v: k for k, v in anon_map.items()}
+        result = run_single_judge(prompt)
 
     if not result["success"]:
         return {mk: {
